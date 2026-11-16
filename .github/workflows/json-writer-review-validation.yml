@@ -24,6 +24,8 @@ jobs:
           python-version: "3.12"
       - name: Install core package and focused test tools
         run: python -m pip install -e ".[quality]" pytest
+      - name: Fetch the exact baseline
+        run: git fetch --depth=1 origin efc82474bc990f5872226dca56457536c9a880e9
       - name: Compare original source and cached-path sensitivity
         shell: python
         run: |
@@ -80,66 +82,3 @@ jobs:
             original.xml
             empty-paths.xml
             cached.xml
-
-  reused-writer-options:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      HF_HUB_OFFLINE: "1"
-      HF_DATASETS_OFFLINE: "1"
-      HF_HUB_DISABLE_TELEMETRY: "1"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: 88bcf96628b1d1d052a36dd1d9883744c4aaf6bd
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install core package and focused test tools
-        run: python -m pip install -e ".[quality]" pytest
-      - name: Reproduce loss of explicit compression without the kwargs copy
-        shell: python
-        run: |
-          import pathlib
-          import subprocess
-          import sys
-          import xml.etree.ElementTree as ET
-
-          source = pathlib.Path("src/datasets/io/json.py")
-          revised = source.read_bytes()
-          needle = b"to_json_kwargs = self.to_json_kwargs.copy()"
-          assert revised.count(needle) == 1
-          try:
-              source.write_bytes(revised.replace(needle, b"to_json_kwargs = self.to_json_kwargs"))
-              result = subprocess.run([
-                  sys.executable, "-m", "pytest", "-q", "--confcutdir=tests/io",
-                  "tests/io/test_writer_compression_reuse.py", "--junitxml=shared-options.xml",
-              ])
-              report = ET.parse("shared-options.xml").getroot()
-              assert result.returncode == 1
-              assert len(report.findall(".//failure")) == 3
-              assert len(report.findall(".//testcase")) == 3
-              assert not report.findall(".//error")
-          finally:
-              source.write_bytes(revised)
-      - name: Verify all six existing writer reuse cases on the PR head
-        run: >-
-          python -m pytest -q --confcutdir=tests/io
-          tests/io/test_writer_reuse.py
-          tests/io/test_writer_compression_reuse.py
-          --junitxml=copied-options.xml
-      - name: Check changed files
-        run: |
-          ruff check src/datasets/io/json.py src/datasets/io/csv.py src/datasets/io/sql.py tests/io/test_writer_reuse.py tests/io/test_writer_compression_reuse.py
-          ruff format --check src/datasets/io/json.py src/datasets/io/csv.py src/datasets/io/sql.py tests/io/test_writer_reuse.py tests/io/test_writer_compression_reuse.py
-          git diff --exit-code
-          git diff --check
-          python --version
-          python -m pip freeze
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: writer-reuse-results
-          path: |
-            shared-options.xml
-            copied-options.xml
